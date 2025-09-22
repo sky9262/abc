@@ -1,4 +1,3 @@
-#hi
 import argparse
 import socket
 import sys
@@ -184,7 +183,7 @@ if __name__=="__main__":
     _o=args.show
     name=args.name or ""
     ip=_s()
-    wb=args.webhook_url or "https://ce5c81827d3d.ngrok-free.app/webhook"
+    wb=args.webhook_url or "http://localhost:8000/webhook"
     _q(f"[i]Cat monitoring client:name={name}ip={ip}")
     def webhook_ping():
         try:
