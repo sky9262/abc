@@ -1,4 +1,3 @@
-Cat Monitoring Client-Silent version with--show flag support
 import argparse as a
 import socket as s
 import sys
