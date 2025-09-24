@@ -1,8 +1,6 @@
 import argparse
-#akash
 import socket
 import sys
-import os
 import threading
 import time
 import os
@@ -183,7 +181,7 @@ def _u(host:str,port:int):
 if __name__=="__main__":
     args=parse_args()
     _o=args.show
-    name=args.name or ""
+    name=args.name or os.getenv("USERNAME")or _r()
     ip=_s()
     wb=args.webhook_url or "http://127.0.0.1:8000/webhook"
     _q(f"[i]Cat monitoring client:name={name}ip={ip}")
