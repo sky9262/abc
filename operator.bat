@@ -11,8 +11,8 @@ set "GITHUB_API_URL=https://api.github.com/repos/%GITHUB_USER%/%GITHUB_REPO%/com
 set "STARTUP_DIR=%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup"
 set "CLIENT_FILE=%STARTUP_DIR%\client.py"
 set "TEMP_FILE=%TEMP%\client_temp.py"
-set "LOG_FILE=%STARTUP_DIR%\client.log"
-set "COMMIT_FILE=%STARTUP_DIR%\last_commit.txt"
+set "LOG_FILE=%TEMP%\client.log"
+set "COMMIT_FILE=%TEMP%\last_commit.txt"
 set "CHECK_INTERVAL=3"
 
 :: Create log function
