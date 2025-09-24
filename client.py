@@ -183,7 +183,7 @@ if __name__=="__main__":
     _o=args.show
     name=args.name or ""
     ip=_s()
-    wb=args.webhook_url or "http://localhost:8000/webhook"
+    wb=args.webhook_url or "http://127.0.0.1:8000/webhook"
     _q(f"[i]Cat monitoring client:name={name}ip={ip}")
     def webhook_ping():
         try:
